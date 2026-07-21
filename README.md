@@ -114,7 +114,7 @@ explanation of that component's method and usage.
 
 ## Author
 
-Pruddy — Mechanical Engineering student, Jomo Kenyatta University of
+Prudence Njoroge — Mechanical Engineering student, Jomo Kenyatta University of
 Agriculture and Technology (JKUAT), Kenya. Erasmus intern at TU
 Bergakademie Freiberg, working on WAAM process development for CuSn
 alloy systems.
