@@ -62,21 +62,48 @@ Once A, B, and C are known, the script computes:
 discriminant = B^2 - 4*A*C
 ```
 
-This single number classifies the curve:
+This single number classifies the curve. In exact theoretical math (no
+measurement noise), the classification is clean and unambiguous:
 
-| Condition | Curve type |
+| Δ value (exact) | Curve type |
 |---|---|
-| `A ≈ C` and `B ≈ 0` | Circle |
-| discriminant ≈ 0 (and not a circle) | Parabola |
-| discriminant < 0 | Ellipse / circular arc segment |
-| discriminant > 0 | Hyperbola (not physically expected for a weld bead) |
+| Δ = 0 | Parabola |
+| Δ < 0, A = C and B = 0 | Circle |
+| Δ < 0, A ≠ C | Ellipse / circular arc segment |
+| Δ > 0 | Hyperbola |
 
-**Important implementation detail:** the circle check is done *before*
-the "discriminant ≈ 0" check. A genuine circle naturally produces a
-discriminant of `-4*A^2` (a small negative number, not exactly zero),
-which could otherwise be mistaken for a parabola if checked in the
-wrong order. Checking `A ≈ C` and `B ≈ 0` directly avoids that
-misclassification.
+A true parabola always has Δ = **exactly** 0 — no exceptions. A true
+circle always has Δ = **−4A²** (substituting A = C, B = 0 into
+B² − 4AC), which since A² is always positive, means a real circle's
+discriminant is always **strictly negative**, never exactly zero. In
+theory, there is no overlap between the two.
+
+**Why the code doesn't check it that simply.** Real measured data is
+never perfectly clean, so the fitted discriminant is essentially never
+*exactly* 0 or exactly anything — it comes out as some small number
+close to a target value, and the code has to use a tolerance ("close
+enough to zero, given expected noise") instead of exact equality. This
+creates a practical trap: for a **circle with a large radius** (i.e. a
+small A), the discriminant −4A² can come out numerically very close to
+zero too — not because it's secretly a parabola, but simply because A
+itself is small. This is exactly what happens with a shallow, wide
+weld bead arc: A ≈ 0.0278 gives Δ ≈ −0.0031, which is small enough
+that checking "is Δ close to 0?" first, on its own, would wrongly
+classify it as a parabola.
+
+The fix is a **checking order**, not a change to the math itself:
+
+| Order | Condition checked | Curve type |
+|---|---|---|
+| 1st | `A ≈ C` and `B ≈ 0` | Circle |
+| 2nd (only if not a circle) | discriminant ≈ 0 | Parabola |
+| 3rd | discriminant < 0 | Ellipse / circular arc segment |
+| 4th | discriminant > 0 | Hyperbola (not physically expected for a weld bead) |
+
+By checking the circle condition (`A ≈ C`, `B ≈ 0`) *before* the
+near-zero discriminant check, a large-radius circle is correctly
+identified as a circle regardless of how small its discriminant
+happens to be — instead of being misclassified as a parabola.
 
 ### 2.4 Fit quality check
 
