@@ -165,3 +165,71 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ------------------------------------------------------------------
+# Step 3: Overlap engine -- place multiple beads side by side and
+# compute the resulting composite surface.
+# ------------------------------------------------------------------
+def build_bead_centers(count, spacing):
+    """
+    Return a list of x-positions for each bead's center, evenly spaced
+    and centered around x=0.
+
+    Example: count=4, spacing=7 -> centers at -10.5, -3.5, 3.5, 10.5
+    """
+    first_center = -(count - 1) * spacing / 2.0
+    return [first_center + i * spacing for i in range(count)]
+
+
+def envelope_height(x, height_fn, centers):
+    """
+    Given a single bead's height function (height_fn(x) -> y, centered
+    at x=0) and a list of bead center positions, return the height of
+    the COMBINED surface at position x -- the tallest bead present there.
+
+    height_fn must be one of the functions from Step 1/2 (or a lambda
+    wrapping them), taking a bead-relative x and returning a height or None.
+    """
+    best = 0.0  # substrate level, if no bead reaches this x at all
+    for center in centers:
+        val = height_fn(x - center)
+        if val is not None and val > best:
+            best = val
+    return best
+
+
+def compute_envelope(height_fn, centers, x_min, x_max, num_samples=500):
+    """
+    Compute the combined surface height across a range of x-positions.
+    Returns two lists: x_values, y_values (same length, ready to plot).
+    """
+    x_values = [x_min + (x_max - x_min) * i / (num_samples - 1) for i in range(num_samples)]
+    y_values = [envelope_height(x, height_fn, centers) for x in x_values]
+    return x_values, y_values
+
+
+def compute_waviness(height_fn, centers, num_samples_per_gap=200):
+    """
+    For each pair of adjacent beads, find the valley (lowest point of the
+    combined surface between them) and compare it to the peak height, to
+    quantify how much the surface dips between beads.
+
+    Returns a list of (gap_index, peak_height, valley_height, waviness) tuples,
+    one entry per adjacent pair of beads.
+    """
+    results = []
+    for i in range(len(centers) - 1):
+        left_center = centers[i]
+        right_center = centers[i + 1]
+        # Sample densely in the gap between these two bead centers
+        x_values = [
+            left_center + (right_center - left_center) * j / (num_samples_per_gap - 1)
+            for j in range(num_samples_per_gap)
+        ]
+        y_values = [envelope_height(x, height_fn, centers) for x in x_values]
+        valley = min(y_values)
+        peak = max(y_values)  # the peak of whichever bead is tallest in this window
+        waviness = peak - valley
+        results.append((i, peak, valley, waviness))
+    return results
