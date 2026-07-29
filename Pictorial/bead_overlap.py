@@ -305,3 +305,51 @@ def compute_gap_metrics(height_fn, centers, samples_per_gap=1000):
             "has_gap": has_gap,
         })
     return results
+
+
+# ------------------------------------------------------------------
+# Equal-area optimal spacing solver -- works for ANY bead shape
+# (preset or raw equation), by numerically finding the spacing where
+# overlap_area equals valley_area (bisection search).
+# ------------------------------------------------------------------
+def find_equal_area_spacing(height_fn, search_min=0.1, search_max=None, tol=1e-4, max_iter=100):
+    """
+    Find the center-to-center spacing p at which overlap_area equals
+    valley_area for two identical beads (the equal-area criterion).
+
+    Returns (p, overlap_area, valley_area) at the solution, or None if
+    no sign change is found in the search range (e.g. the beads never
+    overlap enough, or always overlap too much).
+    """
+    if search_max is None:
+        # A generous upper bound -- default to twice the single-bead area's
+        # implied footprint, refined below if needed.
+        search_max = 40.0
+
+    def f(p):
+        centers = [0.0, p]
+        m = compute_gap_metrics(height_fn, centers)[0]
+        return m["overlap_area"] - m["valley_area"]
+
+    lo, hi = search_min, search_max
+    f_lo, f_hi = f(lo), f(hi)
+
+    if f_lo * f_hi > 0:
+        return None  # no sign change -- can't bisect
+
+    for _ in range(max_iter):
+        mid = (lo + hi) / 2
+        f_mid = f(mid)
+        if abs(f_mid) < tol:
+            break
+        if f_lo * f_mid < 0:
+            hi = mid
+            f_hi = f_mid
+        else:
+            lo = mid
+            f_lo = f_mid
+
+    p_solution = (lo + hi) / 2
+    centers = [0.0, p_solution]
+    m = compute_gap_metrics(height_fn, centers)[0]
+    return p_solution, m["overlap_area"], m["valley_area"]
