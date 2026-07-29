@@ -11,6 +11,10 @@ Run this file directly to interactively test it -- no code editing needed.
 
 import numpy as np
 
+# numpy 2.0+ renamed trapz to trapezoid; support both so this runs on
+# whichever numpy version is installed.
+_trapz = getattr(np, "trapezoid", None) or np.trapz
+
 
 # ------------------------------------------------------------------
 # (a) Preset shapes -- direct formula, one step from x to y
@@ -232,4 +236,72 @@ def compute_waviness(height_fn, centers, num_samples_per_gap=200):
         peak = max(y_values)  # the peak of whichever bead is tallest in this window
         waviness = peak - valley
         results.append((i, peak, valley, waviness))
+    return results
+
+
+# ------------------------------------------------------------------
+# Step 4: Area metrics -- overlap area, valley area, overlap percentage,
+# and gap detection.
+# ------------------------------------------------------------------
+def _safe_height(height_fn, x):
+    """Call height_fn(x) and return 0.0 instead of None (i.e. treat
+    'no material here' as zero height for area/integration purposes)."""
+    val = height_fn(x)
+    return 0.0 if val is None else val
+
+
+def compute_single_bead_area(height_fn, half_span=50.0, num_samples=2000):
+    """
+    Compute the cross-sectional area of ONE bead by numerically
+    integrating its height function across a generous span (anything
+    outside the bead's real footprint contributes 0, so a wide span
+    is safe to use for any bead shape or equation).
+    """
+    xs = np.linspace(-half_span, half_span, num_samples)
+    ys = np.array([_safe_height(height_fn, x) for x in xs])
+    return _trapz(ys, xs)
+
+
+def compute_gap_metrics(height_fn, centers, samples_per_gap=1000):
+    """
+    For each pair of adjacent beads, compute:
+      - peak, valley, waviness (as before)
+      - overlap_area: the area where the two beads' material physically
+        intersects (the "lens" region where both beads are present)
+      - valley_area: the area of the dip relative to the peak level --
+        how much material would be needed to fill the valley flat
+      - has_gap: True if the valley touches/goes below 0 (exposed substrate)
+
+    Restricts the integration window to the region between the two bead
+    centers, which contains the full overlap lens and valley dip for
+    symmetric bead shapes.
+    """
+    results = []
+    for i in range(len(centers) - 1):
+        c1, c2 = centers[i], centers[i + 1]
+        xs = np.linspace(c1, c2, samples_per_gap)
+
+        h1 = np.array([_safe_height(height_fn, x - c1) for x in xs])
+        h2 = np.array([_safe_height(height_fn, x - c2) for x in xs])
+
+        envelope = np.maximum(h1, h2)       # the visible combined surface
+        overlap_curve = np.minimum(h1, h2)  # where both beads' material coincides
+
+        peak = float(envelope.max())
+        valley = float(envelope.min())
+        waviness = peak - valley
+
+        overlap_area = float(_trapz(overlap_curve, xs))
+        valley_area = float(_trapz(np.clip(peak - envelope, 0, None), xs))
+        has_gap = valley <= 1e-9  # essentially zero or negative -> exposed substrate
+
+        results.append({
+            "gap_index": i,
+            "peak": peak,
+            "valley": valley,
+            "waviness": waviness,
+            "overlap_area": overlap_area,
+            "valley_area": valley_area,
+            "has_gap": has_gap,
+        })
     return results
