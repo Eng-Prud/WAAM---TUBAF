@@ -16,7 +16,8 @@ import matplotlib.pyplot as plt
 from bead_overlap import (
     height_at_preset, height_at_equation,
     build_bead_centers, compute_envelope,
-    compute_single_bead_area, compute_gap_metrics
+    compute_single_bead_area, compute_gap_metrics,
+    find_equal_area_spacing
 )
 
 st.set_page_config(page_title="WAAM Bead Overlap Simulator", layout="centered")
@@ -78,6 +79,22 @@ if error_message:
 # Placement
 # ------------------------------------------------------------------
 st.header("2. Place the beads")
+
+with st.expander("💡 Suggested equal-area spacing", expanded=True):
+    st.write(
+        "This is the spacing where overlap area equals valley area (the "
+        "materials-balance criterion from the literature) -- it assumes "
+        "the molten bead can flow/redistribute during welding. It is "
+        "**not** a guarantee of a geometrically flat surface; the plot "
+        "below still shows the raw, unflowed geometric envelope."
+    )
+    eq_result = find_equal_area_spacing(height_fn, search_min=0.1, search_max=approx_width)
+    if eq_result is not None:
+        eq_spacing, eq_overlap, eq_valley = eq_result
+        st.write(f"**Suggested spacing: {eq_spacing:.3f} mm** (overlap area = valley area = {eq_overlap:.3f} mm²)")
+    else:
+        st.write("Could not find an equal-area spacing in the searched range for this bead shape.")
+
 col1, col2 = st.columns(2)
 with col1:
     count = st.slider("Number of beads", min_value=1, max_value=10, value=4)
@@ -97,11 +114,23 @@ st.header("3. Result")
 
 fig, ax = plt.subplots(figsize=(8, 4.2), dpi=150)
 ax.fill_between(x_values, y_values, 0, color="#5DCAA5", alpha=0.6)
-ax.plot(x_values, y_values, color="#0F6E56", lw=2)
+ax.plot(x_values, y_values, color="#0F6E56", lw=2, label="Actual envelope (no material flow)")
+
+# Flat-top reference lines: show what full material redistribution would
+# look like (peak height held flat across each gap), shading the "deficit"
+# area that would need to flow to achieve it.
+if count > 1:
+    gap_metrics_for_plot = compute_gap_metrics(height_fn, centers)
+    for i, m in enumerate(gap_metrics_for_plot):
+        c1, c2 = centers[i], centers[i + 1]
+        ax.plot([c1, c2], [m["peak"], m["peak"]], color="#993C1D", lw=1.3, linestyle="--",
+                 label="Flat-top reference (assumes full flow)" if i == 0 else None)
+
 ax.axhline(0, color="#888780", lw=1)
 ax.set_xlabel("x -- position across substrate (mm)")
 ax.set_ylabel("y -- combined surface height (mm)")
 ax.set_title(f"{count} beads, spacing = {spacing:.1f} mm")
+ax.legend(loc="lower center", fontsize=8, frameon=False, ncol=2)
 ax.grid(alpha=0.2)
 fig.tight_layout()
 st.pyplot(fig)
