@@ -107,8 +107,10 @@ how tall the beads are.
 ### 5.4 Area metrics (`compute_gap_metrics`, `compute_single_bead_area`)
 
 - **Overlap area** — the cross-sectional area where two adjacent beads'
-  material physically coincides (computed as the area under whichever
-  bead is *shorter* at each point, within the gap between their centers).
+  material physically coincides, integrated across the *entire* region
+  where both beads are actually present (not just the strip between
+  their centers — at tight spacing, real overlap extends well beyond
+  both centers in each direction, so the full region must be measured).
 - **Valley area** — the area of the dip relative to the peak height:
   how much material would be needed to fill the valley flat, up to
   peak level. This is a fuller picture than the single-point "valley"
@@ -246,3 +248,31 @@ bead does not.
   only to decide how far to draw the plot), since the exact footprint
   isn't directly available from A–F alone the way it is for preset
   shapes.
+
+---
+
+## 10. Changelog
+
+**Fixed: overlap area under-counted at tight spacing.**
+`compute_gap_metrics` originally integrated overlap area only across
+the strip between the two bead centers (`x` from `c1` to `c2`). At
+tight spacing, most of the real overlapping material sits *outside*
+that narrow strip — each bead's footprint extends well past its own
+center toward its neighbor — so overlap area was being significantly
+under-counted the closer beads were placed together. This produced a
+counter-intuitive result where tighter spacing showed a *smaller*
+overlap percentage than wider spacing.
+
+The fix integrates overlap area across the full region where both
+beads are actually present, using a wide integration window (safe
+regardless of bead shape, since height outside a bead's real footprint
+is always 0). Overlap percentage now decreases smoothly and
+monotonically as spacing increases, as physically expected. This was
+re-verified against the parabola case's known analytic equal-area
+spacing (`p = (2/3)·width`), which still matches to four decimal
+places after the fix — confirming the correction didn't disturb the
+values that were already validated.
+
+Peak, valley, waviness, and valley area were unaffected by this bug —
+they were already correctly restricted to the between-centers window,
+which is the right region for measuring the dip itself.
