@@ -262,38 +262,45 @@ def compute_single_bead_area(height_fn, half_span=50.0, num_samples=2000):
     return _trapz(ys, xs)
 
 
-def compute_gap_metrics(height_fn, centers, samples_per_gap=1000):
+def compute_gap_metrics(height_fn, centers, samples_per_gap=1000, overlap_margin=30.0):
     """
     For each pair of adjacent beads, compute:
-      - peak, valley, waviness (as before)
-      - overlap_area: the area where the two beads' material physically
-        intersects (the "lens" region where both beads are present)
-      - valley_area: the area of the dip relative to the peak level --
-        how much material would be needed to fill the valley flat
+      - peak, valley, waviness -- computed within the window BETWEEN the
+        two bead centers, which correctly contains the dip/valley for
+        symmetric bead shapes.
+      - overlap_area -- the area where the two beads' material physically
+        coincides. IMPORTANT: this must be integrated over the FULL region
+        where both beads are present, not just between the two centers --
+        for tight spacing, real overlap extends well beyond both centers
+        in each direction. A wide margin is used and is always numerically
+        safe, since height_fn returns 0 outside a bead's real footprint.
+      - valley_area: the area of the dip relative to the peak level, within
+        the between-centers window (how much material would be needed to
+        fill the valley flat).
       - has_gap: True if the valley touches/goes below 0 (exposed substrate)
-
-    Restricts the integration window to the region between the two bead
-    centers, which contains the full overlap lens and valley dip for
-    symmetric bead shapes.
     """
     results = []
     for i in range(len(centers) - 1):
         c1, c2 = centers[i], centers[i + 1]
-        xs = np.linspace(c1, c2, samples_per_gap)
 
-        h1 = np.array([_safe_height(height_fn, x - c1) for x in xs])
-        h2 = np.array([_safe_height(height_fn, x - c2) for x in xs])
-
-        envelope = np.maximum(h1, h2)       # the visible combined surface
-        overlap_curve = np.minimum(h1, h2)  # where both beads' material coincides
+        # --- Peak / valley / waviness / valley_area: within [c1, c2] ---
+        xs_gap = np.linspace(c1, c2, samples_per_gap)
+        h1_gap = np.array([_safe_height(height_fn, x - c1) for x in xs_gap])
+        h2_gap = np.array([_safe_height(height_fn, x - c2) for x in xs_gap])
+        envelope = np.maximum(h1_gap, h2_gap)
 
         peak = float(envelope.max())
         valley = float(envelope.min())
         waviness = peak - valley
+        valley_area = float(_trapz(np.clip(peak - envelope, 0, None), xs_gap))
+        has_gap = valley <= 1e-9
 
-        overlap_area = float(_trapz(overlap_curve, xs))
-        valley_area = float(_trapz(np.clip(peak - envelope, 0, None), xs))
-        has_gap = valley <= 1e-9  # essentially zero or negative -> exposed substrate
+        # --- Overlap area: over the FULL region where both beads coexist ---
+        xs_wide = np.linspace(c1 - overlap_margin, c2 + overlap_margin, samples_per_gap * 2)
+        h1_wide = np.array([_safe_height(height_fn, x - c1) for x in xs_wide])
+        h2_wide = np.array([_safe_height(height_fn, x - c2) for x in xs_wide])
+        overlap_curve = np.minimum(h1_wide, h2_wide)
+        overlap_area = float(_trapz(overlap_curve, xs_wide))
 
         results.append({
             "gap_index": i,
