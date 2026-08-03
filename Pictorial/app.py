@@ -159,6 +159,16 @@ if count > 1:
             ax.plot(result["xs"], result["redistributed_envelope"], color="#993C1D", lw=2.2,
                      label="Incompressible model (material conserved)" if i == 0 else None)
 
+            # Shade the OVERFLOW region (where the redistributed surface
+            # rises above the original peak height) in the same amber --
+            # this is the same material as the overlap region, now sitting
+            # visibly above the flat-top line instead of hidden below it.
+            ax.fill_between(
+                result["xs"], result["peak"], result["redistributed_envelope"],
+                where=(result["redistributed_envelope"] > result["peak"]),
+                color=OVERLAP_COLOR, alpha=0.55
+            )
+
 ax.axhline(0, color="#888780", lw=1)
 ax.set_xlabel("x -- position across substrate (mm)")
 ax.set_ylabel("y -- combined surface height (mm)")
