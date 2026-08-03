@@ -426,17 +426,22 @@ def compute_incompressible_gap(height_fn, c1, c2, samples=2000, overlap_margin=3
     fill_amount = overlap_area  # ALL material redistributed -- none discarded
 
     span = c2 - c1
-    # Closed-form amplitude for a half-sine bump, zero at both ends, with
-    # total area under the bump exactly equal to fill_amount:
-    #   integral of A*sin(pi*t/span) from 0 to span = A * (2*span/pi)
-    #   => A = fill_amount * pi / (2*span)
-    bump_amplitude = fill_amount * np.pi / (2 * span)
-    bump = bump_amplitude * np.sin(np.pi * (xs - c1) / span)
+    # Closed-form amplitude for a raised-cosine ("Hann window") bump:
+    # zero HEIGHT *and* zero SLOPE at both ends (unlike a plain sine,
+    # which has zero height but nonzero slope at its ends). This means
+    # consecutive gaps' bumps meet at each shared bead peak with matching
+    # slope as well as matching height, so the whole multi-bead curve
+    # blends into one smooth line instead of separate kinked arcs.
+    #   bump(t) = A * (1 - cos(2*pi*t/span)) / 2
+    #   integral from 0 to span = A * span / 2
+    #   => A = 2 * fill_amount / span
+    bump_amplitude = 2 * fill_amount / span
+    bump = bump_amplitude * (1 - np.cos(2 * np.pi * (xs - c1) / span)) / 2
     redistributed_envelope = raw_envelope + bump
 
     mid_x = (c1 + c2) / 2
     mid_raw = max(_safe_height(height_fn, mid_x - c1), _safe_height(height_fn, mid_x - c2))
-    mid_height = mid_raw + bump_amplitude  # sin is exactly 1 at the true midpoint
+    mid_height = mid_raw + bump_amplitude  # the raised-cosine bump is exactly at its max (=amplitude) at the true midpoint
 
     classification_tol = max(1e-3, peak * 1e-4)
     if mid_height < peak - classification_tol:
@@ -460,5 +465,96 @@ def compute_incompressible_gap(height_fn, c1, c2, samples=2000, overlap_margin=3
         "valley_area": valley_area,
         "peak": peak,
         "valley": valley,
+        "profile_type": profile_type,
+    }
+
+
+# ------------------------------------------------------------------
+# Global (whole-run) incompressible redistribution.
+#
+# Treating each gap independently (as compute_incompressible_gap does)
+# produces one separate bump per gap -- correct in isolation, but for
+# 3+ beads this creates a repeating scalloped pattern (each gap
+# touching back down to the original peak height at every intermediate
+# bead), not the single continuous bulge the literature shows for a
+# whole overlapping run. This function instead treats the ENTIRE bead
+# sequence as one connected system: all redistributed material pools
+# together into ONE smooth bump spanning from the first bead's peak to
+# the last bead's peak, only touching the original peak height at
+# those two outer ends.
+# ------------------------------------------------------------------
+def compute_incompressible_global(height_fn, centers, samples=4000, overlap_margin=30.0):
+    """
+    Compute ONE combined incompressible redistribution curve across an
+    entire multi-bead run (not gap-by-gap).
+
+    Key insight from the reference literature: the concave case (not
+    enough surplus material) still shows individual bead-like humps
+    with a shallower dip -- the beads remain visually distinct. Only
+    once there's enough surplus to fully flatten every local valley
+    does the whole top become smooth -- flat exactly at balance, or
+    rising into ONE single continuous bulge if there's extra. This
+    function reproduces that distinction directly, rather than always
+    adding a bump on top of the (still wavy) raw envelope.
+
+    Returns a dict with:
+      xs, raw_envelope, redistributed_envelope -- arrays spanning the
+        whole run, from centers[0] to centers[-1]
+      total_overlap_area, total_valley_area -- summed across all gaps
+      peak -- the common peak height (identical beads)
+      profile_type -- "concave", "flat", or "convex", based on totals
+    """
+    x_start, x_end = centers[0], centers[-1]
+    xs = np.linspace(x_start, x_end, samples)
+    raw_envelope = np.array([
+        max(_safe_height(height_fn, x - c) for c in centers) for x in xs
+    ])
+    peak = float(raw_envelope.max())
+
+    per_gap = compute_gap_metrics(height_fn, centers, overlap_margin=overlap_margin)
+    total_overlap_area = sum(m["overlap_area"] for m in per_gap)
+    total_valley_area = sum(m["valley_area"] for m in per_gap)
+
+    span = x_end - x_start
+    surplus = total_overlap_area - total_valley_area
+
+    if surplus >= 0:
+        # Enough (or more than enough) material to fully flatten every
+        # local valley: the base becomes the flat peak line, using up
+        # exactly total_valley_area of material. Any leftover surplus
+        # forms ONE single smooth bulge across the whole span.
+        bump_amplitude = 2 * surplus / span
+        bump = bump_amplitude * (1 - np.cos(2 * np.pi * (xs - x_start) / span)) / 2
+        redistributed_envelope = peak + bump
+        mid_height = peak + bump_amplitude
+    else:
+        # Not enough material to fully flatten -- fall back to local,
+        # per-gap smooth redistribution (still shows individual bead
+        # humps with a shallower dip, matching the concave case).
+        redistributed_envelope = np.copy(raw_envelope)
+        for i in range(len(centers) - 1):
+            c1, c2 = centers[i], centers[i + 1]
+            gap_result = compute_incompressible_gap(height_fn, c1, c2, samples=samples // (len(centers) - 1) + 2)
+            mask = (xs >= c1) & (xs <= c2)
+            redistributed_envelope[mask] = np.interp(xs[mask], gap_result["xs"], gap_result["redistributed_envelope"])
+        mid_x = (x_start + x_end) / 2
+        idx = np.argmin(np.abs(xs - mid_x))
+        mid_height = float(redistributed_envelope[idx])
+
+    classification_tol = max(1e-3, peak * 1e-4)
+    if mid_height < peak - classification_tol:
+        profile_type = "concave"
+    elif mid_height > peak + classification_tol:
+        profile_type = "convex"
+    else:
+        profile_type = "flat"
+
+    return {
+        "xs": xs,
+        "raw_envelope": raw_envelope,
+        "redistributed_envelope": redistributed_envelope,
+        "total_overlap_area": total_overlap_area,
+        "total_valley_area": total_valley_area,
+        "peak": peak,
         "profile_type": profile_type,
     }
