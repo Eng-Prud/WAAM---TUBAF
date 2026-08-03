@@ -360,3 +360,99 @@ def find_equal_area_spacing(height_fn, search_min=0.1, search_max=None, tol=1e-4
     centers = [0.0, p_solution]
     m = compute_gap_metrics(height_fn, centers)[0]
     return p_solution, m["overlap_area"], m["valley_area"]
+
+
+# ------------------------------------------------------------------
+# Step 5: Incompressible-material redistribution model.
+#
+# The "max envelope" model silently discards material: at any x, only
+# the taller bead's height is shown, and the shorter bead's material
+# at that same x is not accounted for anywhere. Since real welded
+# metal is solid and incompressible, that material can't disappear --
+# physically it must be pushed into the adjacent valley instead.
+#
+# The amount of material discarded by the max-envelope model is
+# exactly equal to overlap_area (a direct consequence of area
+# accounting: two overlapping regions counted once instead of twice
+# lose exactly the overlap amount). This model redistributes that
+# exact amount of material into the valley, "filling" it from the
+# bottom up (like water settling into a dip) until either the
+# material runs out or the valley is completely flat.
+# ------------------------------------------------------------------
+def compute_incompressible_gap(height_fn, c1, c2, samples=2000, overlap_margin=30.0):
+    """
+    For a single gap between two bead centers, compute the
+    incompressible (material-conserving) redistributed surface.
+
+    ALL of the overlap material is redistributed -- none of it is
+    discarded, even if it exceeds what's needed to reach a flat top.
+    Three outcomes are possible (matching the classic overlap-behavior
+    diagram from the literature):
+      - overlap_area < valley_area  -> concave fillet (partial fill, dip remains)
+      - overlap_area = valley_area  -> exactly flat
+      - overlap_area > valley_area  -> convex overflow (surface rises above peak)
+
+    Returns a dict with:
+      xs, raw_envelope, redistributed_envelope -- arrays for plotting
+      fill_level -- the height the valley was filled up to (may exceed peak)
+      fill_amount -- the area of material redistributed (= overlap_area, always)
+      overlap_area, valley_area, peak, valley -- as before
+      profile_type -- "concave", "flat", or "convex"
+    """
+    xs = np.linspace(c1, c2, samples)
+    h1 = np.array([_safe_height(height_fn, x - c1) for x in xs])
+    h2 = np.array([_safe_height(height_fn, x - c2) for x in xs])
+    raw_envelope = np.maximum(h1, h2)
+
+    peak = float(raw_envelope.max())
+    valley = float(raw_envelope.min())
+    valley_area = float(_trapz(np.clip(peak - raw_envelope, 0, None), xs))
+
+    xs_wide = np.linspace(c1 - overlap_margin, c2 + overlap_margin, samples * 2)
+    h1_wide = np.array([_safe_height(height_fn, x - c1) for x in xs_wide])
+    h2_wide = np.array([_safe_height(height_fn, x - c2) for x in xs_wide])
+    overlap_area = float(_trapz(np.minimum(h1_wide, h2_wide), xs_wide))
+
+    # ALL overlap material is redistributed -- nothing is discarded, even
+    # if it's more than needed to reach flat.
+    fill_amount = overlap_area
+
+    def filled_area(level):
+        return float(_trapz(np.clip(level - raw_envelope, 0, None), xs))
+
+    # Find an upper bound guaranteed to hold enough area, expanding as
+    # needed -- necessary since the fill level may need to exceed peak.
+    lo, hi = valley, peak
+    while filled_area(hi) < fill_amount:
+        hi = peak + (hi - peak + 1.0) * 2.0
+
+    for _ in range(80):
+        mid = (lo + hi) / 2
+        if filled_area(mid) < fill_amount:
+            lo = mid
+        else:
+            hi = mid
+    fill_level = (lo + hi) / 2
+
+    redistributed_envelope = np.maximum(raw_envelope, fill_level)
+
+    classification_tol = max(1e-3, peak * 1e-4)
+    if fill_level < peak - classification_tol:
+        profile_type = "concave"
+    elif fill_level > peak + classification_tol:
+        profile_type = "convex"
+    else:
+        profile_type = "flat"
+
+    return {
+        "xs": xs,
+        "raw_envelope": raw_envelope,
+        "redistributed_envelope": redistributed_envelope,
+        "fill_level": fill_level,
+        "fill_amount": fill_amount,
+        "overlap_area": overlap_area,
+        "valley_area": valley_area,
+        "peak": peak,
+        "valley": valley,
+        "profile_type": profile_type,
+    }
