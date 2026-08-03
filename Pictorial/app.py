@@ -17,7 +17,7 @@ from bead_overlap import (
     height_at_preset, height_at_equation,
     build_bead_centers, compute_envelope,
     compute_single_bead_area, compute_gap_metrics,
-    find_equal_area_spacing
+    find_equal_area_spacing, compute_incompressible_gap
 )
 
 st.set_page_config(page_title="WAAM Bead Overlap Simulator", layout="centered")
@@ -112,25 +112,31 @@ x_values, y_values = compute_envelope(height_fn, centers, x_min, x_max, num_samp
 
 st.header("3. Result")
 
-fig, ax = plt.subplots(figsize=(8, 4.2), dpi=150)
-ax.fill_between(x_values, y_values, 0, color="#5DCAA5", alpha=0.6)
-ax.plot(x_values, y_values, color="#0F6E56", lw=2, label="Actual envelope (no material flow)")
+show_incompressible = st.checkbox(
+    "Show incompressible material model (redistribute overlap material into the valley)",
+    value=True
+)
 
-# Flat-top reference lines: show what full material redistribution would
-# look like (peak height held flat across each gap), shading the "deficit"
-# area that would need to flow to achieve it.
+fig, ax = plt.subplots(figsize=(8, 4.2), dpi=150)
+ax.fill_between(x_values, y_values, 0, color="#5DCAA5", alpha=0.5)
+ax.plot(x_values, y_values, color="#0F6E56", lw=1.6, linestyle="--",
+        label="Raw envelope (material ignored, non-physical)")
+
 if count > 1:
-    gap_metrics_for_plot = compute_gap_metrics(height_fn, centers)
-    for i, m in enumerate(gap_metrics_for_plot):
+    incompressible_results = []
+    for i in range(len(centers) - 1):
         c1, c2 = centers[i], centers[i + 1]
-        ax.plot([c1, c2], [m["peak"], m["peak"]], color="#993C1D", lw=1.3, linestyle="--",
-                 label="Flat-top reference (assumes full flow)" if i == 0 else None)
+        result = compute_incompressible_gap(height_fn, c1, c2)
+        incompressible_results.append(result)
+        if show_incompressible:
+            ax.plot(result["xs"], result["redistributed_envelope"], color="#993C1D", lw=2.2,
+                     label="Incompressible model (material conserved)" if i == 0 else None)
 
 ax.axhline(0, color="#888780", lw=1)
 ax.set_xlabel("x -- position across substrate (mm)")
 ax.set_ylabel("y -- combined surface height (mm)")
 ax.set_title(f"{count} beads, spacing = {spacing:.1f} mm")
-ax.legend(loc="lower center", fontsize=8, frameon=False, ncol=2)
+ax.legend(loc="lower center", fontsize=8, frameon=False, ncol=1)
 ax.grid(alpha=0.2)
 fig.tight_layout()
 st.pyplot(fig)
@@ -159,19 +165,45 @@ if count > 1:
     col3.metric("Single bead area", f"{single_bead_area:.2f} mm²")
 
     with st.expander("Detailed metrics, per gap between beads", expanded=True):
-        for m in gap_metrics:
+        for idx, m in enumerate(gap_metrics):
             overlap_pct = (m["overlap_area"] / single_bead_area) * 100
             gap_flag = " ⚠️ GAP" if m["has_gap"] else ""
             st.markdown(f"**Beads {m['gap_index']+1}-{m['gap_index']+2}**{gap_flag}")
             st.write(
                 f"- Peak: {m['peak']:.4f} mm | Valley: {m['valley']:.4f} mm | "
-                f"Waviness: {m['waviness']:.4f} mm"
+                f"Raw waviness: {m['waviness']:.4f} mm"
             )
             st.write(
                 f"- Overlap area: {m['overlap_area']:.4f} mm² "
                 f"({overlap_pct:.1f}% of a single bead's area)"
             )
             st.write(f"- Valley area (deficit vs. peak level): {m['valley_area']:.4f} mm²")
+
+            ir = incompressible_results[idx]
+            redistributed_min = float(ir["redistributed_envelope"].min())
+            redistributed_waviness = ir["peak"] - redistributed_min
+            if ir["profile_type"] == "flat":
+                st.write(
+                    f"- **Incompressible model: exactly flat** -- overlap material "
+                    f"({ir['overlap_area']:.4f} mm²) exactly matches the valley "
+                    f"deficit ({ir['valley_area']:.4f} mm²)."
+                )
+            elif ir["profile_type"] == "convex":
+                st.write(
+                    f"- **Incompressible model: convex overflow** -- overlap "
+                    f"material ({ir['overlap_area']:.4f} mm²) exceeds the valley "
+                    f"deficit ({ir['valley_area']:.4f} mm²). The surplus has "
+                    f"nowhere to go but up: the surface rises to "
+                    f"{ir['fill_level']:.4f} mm, above the peak height of "
+                    f"{ir['peak']:.4f} mm."
+                )
+            else:
+                st.write(
+                    f"- **Incompressible model: concave (partial fill)** -- "
+                    f"{ir['fill_amount']:.4f} mm² of {ir['valley_area']:.4f} mm² "
+                    f"needed was available. Redistributed waviness: "
+                    f"{redistributed_waviness:.4f} mm (down from {m['waviness']:.4f} mm)."
+                )
             st.divider()
 
     st.caption(
