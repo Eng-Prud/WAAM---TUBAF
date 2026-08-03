@@ -384,18 +384,27 @@ def compute_incompressible_gap(height_fn, c1, c2, samples=2000, overlap_margin=3
     For a single gap between two bead centers, compute the
     incompressible (material-conserving) redistributed surface.
 
-    ALL of the overlap material is redistributed -- none of it is
-    discarded, even if it exceeds what's needed to reach a flat top.
-    Three outcomes are possible (matching the classic overlap-behavior
-    diagram from the literature):
-      - overlap_area < valley_area  -> concave fillet (partial fill, dip remains)
-      - overlap_area = valley_area  -> exactly flat
-      - overlap_area > valley_area  -> convex overflow (surface rises above peak)
+    Rather than capping the valley at a flat plateau (which produced
+    sharp, non-physical corners), the redistributed material is added
+    as a smooth half-sine bump on top of the raw envelope: zero at
+    both bead centers (tapering naturally into the untouched flanks
+    outside the gap) and largest at the midpoint. This is always
+    physically valid (material is only ever added, never removed,
+    since the bump is non-negative everywhere) and its area is exactly
+    equal to the redistributed material, in closed form -- no
+    iterative search needed.
+
+    Depending on how much material is available relative to the
+    valley's deficit, the result naturally comes out either still
+    dipping below the peak (concave), landing almost exactly at peak
+    height (flat), or rising smoothly above the peak (convex) --
+    matching the classic overlap-behavior diagram from the literature.
 
     Returns a dict with:
-      xs, raw_envelope, redistributed_envelope -- arrays for plotting
-      fill_level -- the height the valley was filled up to (may exceed peak)
-      fill_amount -- the area of material redistributed (= overlap_area, always)
+      xs, h1, h2, raw_envelope, redistributed_envelope -- arrays for plotting
+      xs_wide, overlap_curve_wide -- the true overlap footprint, for shading
+      bump_amplitude, mid_height -- how much material was added, and the
+        resulting height at the midpoint (where the bump is largest)
       overlap_area, valley_area, peak, valley -- as before
       profile_type -- "concave", "flat", or "convex"
     """
@@ -411,45 +420,42 @@ def compute_incompressible_gap(height_fn, c1, c2, samples=2000, overlap_margin=3
     xs_wide = np.linspace(c1 - overlap_margin, c2 + overlap_margin, samples * 2)
     h1_wide = np.array([_safe_height(height_fn, x - c1) for x in xs_wide])
     h2_wide = np.array([_safe_height(height_fn, x - c2) for x in xs_wide])
-    overlap_area = float(_trapz(np.minimum(h1_wide, h2_wide), xs_wide))
+    overlap_curve_wide = np.minimum(h1_wide, h2_wide)
+    overlap_area = float(_trapz(overlap_curve_wide, xs_wide))
 
-    # ALL overlap material is redistributed -- nothing is discarded, even
-    # if it's more than needed to reach flat.
-    fill_amount = overlap_area
+    fill_amount = overlap_area  # ALL material redistributed -- none discarded
 
-    def filled_area(level):
-        return float(_trapz(np.clip(level - raw_envelope, 0, None), xs))
+    span = c2 - c1
+    # Closed-form amplitude for a half-sine bump, zero at both ends, with
+    # total area under the bump exactly equal to fill_amount:
+    #   integral of A*sin(pi*t/span) from 0 to span = A * (2*span/pi)
+    #   => A = fill_amount * pi / (2*span)
+    bump_amplitude = fill_amount * np.pi / (2 * span)
+    bump = bump_amplitude * np.sin(np.pi * (xs - c1) / span)
+    redistributed_envelope = raw_envelope + bump
 
-    # Find an upper bound guaranteed to hold enough area, expanding as
-    # needed -- necessary since the fill level may need to exceed peak.
-    lo, hi = valley, peak
-    while filled_area(hi) < fill_amount:
-        hi = peak + (hi - peak + 1.0) * 2.0
-
-    for _ in range(80):
-        mid = (lo + hi) / 2
-        if filled_area(mid) < fill_amount:
-            lo = mid
-        else:
-            hi = mid
-    fill_level = (lo + hi) / 2
-
-    redistributed_envelope = np.maximum(raw_envelope, fill_level)
+    mid_x = (c1 + c2) / 2
+    mid_raw = max(_safe_height(height_fn, mid_x - c1), _safe_height(height_fn, mid_x - c2))
+    mid_height = mid_raw + bump_amplitude  # sin is exactly 1 at the true midpoint
 
     classification_tol = max(1e-3, peak * 1e-4)
-    if fill_level < peak - classification_tol:
+    if mid_height < peak - classification_tol:
         profile_type = "concave"
-    elif fill_level > peak + classification_tol:
+    elif mid_height > peak + classification_tol:
         profile_type = "convex"
     else:
         profile_type = "flat"
 
     return {
         "xs": xs,
+        "h1": h1,
+        "h2": h2,
         "raw_envelope": raw_envelope,
         "redistributed_envelope": redistributed_envelope,
-        "fill_level": fill_level,
-        "fill_amount": fill_amount,
+        "xs_wide": xs_wide,
+        "overlap_curve_wide": overlap_curve_wide,
+        "bump_amplitude": bump_amplitude,
+        "mid_height": mid_height,
         "overlap_area": overlap_area,
         "valley_area": valley_area,
         "peak": peak,
