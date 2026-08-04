@@ -137,7 +137,7 @@ if show_incompressible and count > 1:
     # flanks of the very first and last bead are untouched, so they're
     # stitched on from the raw (unredistributed) shape to give a complete
     # outline with no missing edges.
-    full_x = x_values
+    full_x = np.array(x_values)
     full_y = np.array(y_values, dtype=float)
     inner_mask = (full_x >= centers[0]) & (full_x <= centers[-1])
     full_y[inner_mask] = np.interp(full_x[inner_mask], global_result["xs"], global_result["redistributed_envelope"])
