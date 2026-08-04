@@ -9,6 +9,7 @@ combined overlap surface, waviness, and area metrics update live.
 """
 
 import streamlit as st
+import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -115,80 +116,84 @@ x_values, y_values = compute_envelope(height_fn, centers, x_min, x_max, num_samp
 st.header("3. Result")
 
 show_incompressible = st.checkbox(
-    "Show incompressible material model (redistribute overlap material into the valley)",
+    "Show incompressible material model (the real, physical weld shape)",
     value=True
 )
+show_details = st.checkbox(
+    "Show material redistribution details (where the extra material comes from)",
+    value=False
+)
 
-OVERLAP_COLOR = "#D98E2B"  # amber -- used for BOTH the overlap region and the
-                            # matching valley-fill region, to visually connect them
+OVERLAP_COLOR = "#D98E2B"
 
 fig, ax = plt.subplots(figsize=(8, 4.2), dpi=150)
-ax.fill_between(x_values, y_values, 0, color="#5DCAA5", alpha=0.45)
-ax.plot(x_values, y_values, color="#0F6E56", lw=1.6, linestyle="--",
-        label="Raw envelope (material ignored, non-physical)")
 
-if count > 1:
+if show_incompressible and count > 1:
+    # PRIMARY view: the actual, physical weld outline after redistribution
+    # -- filled in solid, the same way every bead has been shown this
+    # whole time. This is the answer to "what does the weld look like?"
+    #
+    # The redistribution only happens BETWEEN bead centers -- the outer
+    # flanks of the very first and last bead are untouched, so they're
+    # stitched on from the raw (unredistributed) shape to give a complete
+    # outline with no missing edges.
+    full_x = x_values
+    full_y = np.array(y_values, dtype=float)
+    inner_mask = (full_x >= centers[0]) & (full_x <= centers[-1])
+    full_y[inner_mask] = np.interp(full_x[inner_mask], global_result["xs"], global_result["redistributed_envelope"])
+
+    ax.fill_between(full_x, full_y, 0, color="#5DCAA5", alpha=0.6)
+    ax.plot(full_x, full_y, color="#0F6E56", lw=2.2,
+            label="Actual weld outline (material conserved)")
+    # The original, unrealistic "ignore the overlap" shape, for comparison only
+    ax.plot(x_values, y_values, color="#993C1D", lw=1.3, linestyle="--",
+            label="If material just disappeared (unrealistic)")
+else:
+    ax.fill_between(x_values, y_values, 0, color="#5DCAA5", alpha=0.6)
+    ax.plot(x_values, y_values, color="#0F6E56", lw=2.2, label="Weld outline")
+
+if show_details and count > 1:
+    fill_fraction = min(1.0, global_result["total_overlap_area"] / global_result["total_valley_area"]) \
+        if global_result["total_valley_area"] > 0 else 1.0
+    valley_alpha = 0.08 + 0.42 * fill_fraction
+
     overlap_label_used = False
     valley_label_used = False
     for i in range(len(centers) - 1):
         c1, c2 = centers[i], centers[i + 1]
         gap_result = compute_incompressible_gap(height_fn, c1, c2)
-
-        # Shade the TRUE overlap region (where both beads' material
-        # physically coincides) in amber -- this is the material that
-        # gets redistributed. This is still a genuinely LOCAL feature
-        # (each pair of neighboring beads has its own overlap lens).
         ax.fill_between(
             gap_result["xs_wide"], 0, gap_result["overlap_curve_wide"],
-            color=OVERLAP_COLOR, alpha=0.55,
+            color=OVERLAP_COLOR, alpha=0.5,
             label="Overlap region (material available to redistribute)" if not overlap_label_used else None
         )
         overlap_label_used = True
-
-        # Shade the valley deficit (the gap between the raw envelope and
-        # peak height) in the SAME amber color.
         ax.fill_between(
             gap_result["xs"], gap_result["raw_envelope"], gap_result["peak"],
             where=(gap_result["raw_envelope"] < gap_result["peak"]),
-            color=OVERLAP_COLOR, alpha=0.3,
+            color=OVERLAP_COLOR, alpha=valley_alpha,
             label="Valley deficit (where that material is needed)" if not valley_label_used else None
         )
         valley_label_used = True
-
-    if show_incompressible:
-        # ONE single curve across the WHOLE multi-bead run -- not one
-        # bump per gap. If there's enough surplus material globally to
-        # flatten every valley, the entire top becomes flat, with any
-        # leftover forming a single continuous bulge (not a repeating
-        # scalloped pattern). If there isn't enough material, the
-        # individual bead humps remain visible with a shallower dip.
-        ax.plot(global_result["xs"], global_result["redistributed_envelope"], color="#993C1D", lw=2.2,
-                 label="Incompressible model (material conserved)")
-
-        ax.fill_between(
-            global_result["xs"], global_result["peak"], global_result["redistributed_envelope"],
-            where=(global_result["redistributed_envelope"] > global_result["peak"]),
-            color=OVERLAP_COLOR, alpha=0.55
-        )
 
 ax.axhline(0, color="#888780", lw=1)
 ax.set_xlabel("x -- position across substrate (mm)")
 ax.set_ylabel("y -- combined surface height (mm)")
 ax.set_title(f"{count} beads, spacing = {spacing:.1f} mm")
-ax.legend(loc="lower center", fontsize=7.5, frameon=False, ncol=1)
+ax.legend(loc="lower center", fontsize=8, frameon=False, ncol=1)
 ax.grid(alpha=0.2)
 fig.tight_layout()
 st.pyplot(fig)
 
-st.caption(
-    "The amber shading appears in two places using the same color on "
-    "purpose: the region under the overlapping bead humps (material "
-    "available to redistribute) and the region above the valley dip "
-    "(material needed to fill it) -- connecting where the material "
-    "comes from to where it goes."
-)
-
-if count > 1:
+if show_details:
+    st.caption(
+        "The amber shading is a bookkeeping diagram, not a physical part of "
+        "the weld: darker amber shows where two beads' material physically "
+        "overlaps (the source), lighter amber shows how much of the gap "
+        "between beads still needs filling (the destination) -- faded "
+        "in/out depending on how much of that gap is actually being "
+        "addressed."
+    )
     if global_result["profile_type"] == "convex":
         st.info(
             "ℹ️ At this spacing, there's more overlap material overall than "
