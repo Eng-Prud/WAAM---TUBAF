@@ -384,27 +384,24 @@ def compute_incompressible_gap(height_fn, c1, c2, samples=2000, overlap_margin=3
     For a single gap between two bead centers, compute the
     incompressible (material-conserving) redistributed surface.
 
-    Rather than capping the valley at a flat plateau (which produced
-    sharp, non-physical corners), the redistributed material is added
-    as a smooth half-sine bump on top of the raw envelope: zero at
-    both bead centers (tapering naturally into the untouched flanks
-    outside the gap) and largest at the midpoint. This is always
-    physically valid (material is only ever added, never removed,
-    since the bump is non-negative everywhere) and its area is exactly
-    equal to the redistributed material, in closed form -- no
-    iterative search needed.
+    Material pools at the LOWEST point of the valley first, like a
+    liquid settling under gravity -- filling from the bottom up as a
+    flat level, rather than spreading gradually up the bead's own
+    walls. This matches physical intuition (molten material flows to
+    the lowest point, not smeared evenly across the whole slope).
 
-    Depending on how much material is available relative to the
-    valley's deficit, the result naturally comes out either still
-    dipping below the peak (concave), landing almost exactly at peak
-    height (flat), or rising smoothly above the peak (convex) --
-    matching the classic overlap-behavior diagram from the literature.
+    Trade-off, stated honestly: this creates a distinct "waterline" at
+    the exact point where the flat-filled region meets the bead's
+    natural slope -- a real change in steepness right at that point.
+    This is physically reasonable (a real liquid pooling against a
+    solid slope has a genuine waterline, not a smooth blend into it),
+    but it is a visibly different look from a smoothly tapered curve.
 
     Returns a dict with:
       xs, h1, h2, raw_envelope, redistributed_envelope -- arrays for plotting
       xs_wide, overlap_curve_wide -- the true overlap footprint, for shading
-      bump_amplitude, mid_height -- how much material was added, and the
-        resulting height at the midpoint (where the bump is largest)
+      fill_level, mid_height -- the height the pool rose to, and the
+        resulting height at the midpoint
       overlap_area, valley_area, peak, valley -- as before
       profile_type -- "concave", "flat", or "convex"
     """
@@ -423,25 +420,25 @@ def compute_incompressible_gap(height_fn, c1, c2, samples=2000, overlap_margin=3
     overlap_curve_wide = np.minimum(h1_wide, h2_wide)
     overlap_area = float(_trapz(overlap_curve_wide, xs_wide))
 
-    fill_amount = overlap_area  # ALL material redistributed -- none discarded
+    # Only as much material as is locally available AND needed gets used
+    # here -- any true surplus beyond a full local fill is handled at the
+    # whole-run level (compute_incompressible_global), not here.
+    fill_amount = min(overlap_area, valley_area)
 
-    span = c2 - c1
-    # Closed-form amplitude for a raised-cosine ("Hann window") bump:
-    # zero HEIGHT *and* zero SLOPE at both ends (unlike a plain sine,
-    # which has zero height but nonzero slope at its ends). This means
-    # consecutive gaps' bumps meet at each shared bead peak with matching
-    # slope as well as matching height, so the whole multi-bead curve
-    # blends into one smooth line instead of separate kinked arcs.
-    #   bump(t) = A * (1 - cos(2*pi*t/span)) / 2
-    #   integral from 0 to span = A * span / 2
-    #   => A = 2 * fill_amount / span
-    bump_amplitude = 2 * fill_amount / span
-    bump = bump_amplitude * (1 - np.cos(2 * np.pi * (xs - c1) / span)) / 2
-    redistributed_envelope = raw_envelope + bump
+    def filled_area(level):
+        return float(_trapz(np.clip(level - raw_envelope, 0, None), xs))
 
-    mid_x = (c1 + c2) / 2
-    mid_raw = max(_safe_height(height_fn, mid_x - c1), _safe_height(height_fn, mid_x - c2))
-    mid_height = mid_raw + bump_amplitude  # the raised-cosine bump is exactly at its max (=amplitude) at the true midpoint
+    lo, hi = valley, peak
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if filled_area(mid) < fill_amount:
+            lo = mid
+        else:
+            hi = mid
+    fill_level = (lo + hi) / 2
+
+    redistributed_envelope = np.maximum(raw_envelope, fill_level)
+    mid_height = fill_level
 
     classification_tol = max(1e-3, peak * 1e-4)
     if mid_height < peak - classification_tol:
@@ -459,7 +456,7 @@ def compute_incompressible_gap(height_fn, c1, c2, samples=2000, overlap_margin=3
         "redistributed_envelope": redistributed_envelope,
         "xs_wide": xs_wide,
         "overlap_curve_wide": overlap_curve_wide,
-        "bump_amplitude": bump_amplitude,
+        "fill_level": fill_level,
         "mid_height": mid_height,
         "overlap_area": overlap_area,
         "valley_area": valley_area,
