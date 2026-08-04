@@ -520,13 +520,27 @@ def compute_incompressible_global(height_fn, centers, samples=4000, overlap_marg
 
     if surplus >= 0:
         # Enough (or more than enough) material to fully flatten every
-        # local valley: the base becomes the flat peak line, using up
-        # exactly total_valley_area of material. Any leftover surplus
-        # forms ONE single smooth bulge across the whole span.
-        bump_amplitude = 2 * surplus / span
-        bump = bump_amplitude * (1 - np.cos(2 * np.pi * (xs - x_start) / span)) / 2
+        # local valley: the base becomes the flat peak line. Any leftover
+        # surplus is redistributed using a Tukey-window-style shape: FLAT
+        # across most of the middle, tapering smoothly only near the two
+        # ends. This spreads the excess broadly across the whole run
+        # (matching the physical intuition that molten material settles
+        # rather than piling into one sharp spike) instead of a single
+        # narrow raised-cosine peak.
+        taper_fraction = 0.5  # fraction of the span used for tapering (split between both ends); the rest is flat
+        taper_len = taper_fraction * span / 2
+        rel_x = xs - x_start
+        unit_bump = np.ones_like(xs)
+        rising = rel_x <= taper_len
+        falling = rel_x >= (span - taper_len)
+        unit_bump[rising] = (1 - np.cos(np.pi * rel_x[rising] / taper_len)) / 2
+        unit_bump[falling] = (1 - np.cos(np.pi * (span - rel_x[falling]) / taper_len)) / 2
+
+        unit_area = float(_trapz(unit_bump, xs))
+        bump_amplitude = surplus / unit_area if unit_area > 0 else 0.0
+        bump = bump_amplitude * unit_bump
         redistributed_envelope = peak + bump
-        mid_height = peak + bump_amplitude
+        mid_height = peak + bump_amplitude  # unit_bump is exactly 1 across the flat middle
     else:
         # Not enough material to fully flatten -- fall back to local,
         # per-gap smooth redistribution (still shows individual bead
@@ -556,5 +570,47 @@ def compute_incompressible_global(height_fn, centers, samples=4000, overlap_marg
         "total_overlap_area": total_overlap_area,
         "total_valley_area": total_valley_area,
         "peak": peak,
+        "mid_height": mid_height,
         "profile_type": profile_type,
     }
+
+
+# ------------------------------------------------------------------
+# Global equal-area spacing finder -- specific to the actual bead
+# count, using the WHOLE-RUN totals (not just one pair). This is
+# different from find_equal_area_spacing, which only balances a
+# single PAIR of beads and can disagree with the true whole-run
+# balance point once there are 3+ beads.
+# ------------------------------------------------------------------
+def find_global_equal_area_spacing(height_fn, count, search_min=0.1, search_max=40.0, tol=1e-4, max_iter=60):
+    """
+    Find the spacing at which, for a run of `count` identical beads,
+    total_overlap_area exactly equals total_valley_area across the
+    WHOLE run -- the spacing at which compute_incompressible_global
+    reports "flat". Returns (spacing, total_overlap_area, total_valley_area)
+    or None if no sign change is found in the search range.
+    """
+    def f(spacing):
+        centers = build_bead_centers(count, spacing)
+        r = compute_incompressible_global(height_fn, centers, samples=800)
+        return r["total_overlap_area"] - r["total_valley_area"]
+
+    lo, hi = search_min, search_max
+    f_lo, f_hi = f(lo), f(hi)
+    if f_lo * f_hi > 0:
+        return None
+
+    for _ in range(max_iter):
+        mid = (lo + hi) / 2
+        f_mid = f(mid)
+        if abs(f_mid) < tol:
+            break
+        if f_lo * f_mid < 0:
+            hi = mid
+        else:
+            lo = mid
+            f_lo = f_mid
+    spacing_solution = (lo + hi) / 2
+    centers = build_bead_centers(count, spacing_solution)
+    r = compute_incompressible_global(height_fn, centers, samples=800)
+    return spacing_solution, r["total_overlap_area"], r["total_valley_area"]
