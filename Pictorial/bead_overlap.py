@@ -62,18 +62,35 @@ def height_at_preset(x, width, height, shape="parabola"):
 # (b) Raw fitted equation -- any conic, classified or not
 #     A*x^2 + B*x*y + C*y^2 + D*x + E*y = 1   (F fixed at -1, as in Conic_Fit.py)
 # ------------------------------------------------------------------
-def height_at_equation(x, A, B, C, D, E):
+def height_at_equation(x, A, B, C, D, E, valid_half_width=None):
     """
     Return the bead's height at position x, solving the conic equation
     directly for y (quadratic in y). Returns the upper branch (top
     surface of the bead), or None if x falls outside the curve's domain.
+
+    valid_half_width: if provided, x values beyond +/- this distance
+    always return None, regardless of what the algebraic equation says.
+    This matters specifically for near-parabolic fits (C very close to
+    zero): the equation becomes linear in y in that case, which has NO
+    natural point where it stops returning a value -- unlike a genuine
+    ellipse/circle, a straight line extrapolates forever. Without this
+    bound, evaluating far from the bead's real, physical footprint (e.g.
+    at wide bead spacing, or during a wide-range area integration) can
+    return large, nonsensical, even negative "heights" instead of
+    correctly reporting "no material here".
     """
+    if valid_half_width is not None and abs(x) > valid_half_width:
+        return None
+
     a_coef = C
     b_coef = B * x + E
     c_coef = A * x**2 + D * x - 1
 
     if abs(a_coef) < 1e-12:
-        # C is essentially zero -- equation is linear in y, not quadratic
+        # C is essentially zero -- equation is linear in y, not quadratic.
+        # A straight line has no natural domain edge, so without an
+        # explicit valid_half_width bound (above), this branch cannot by
+        # itself tell "real bead" from "meaningless extrapolation".
         if abs(b_coef) < 1e-12:
             return None
         return -c_coef / b_coef
@@ -611,3 +628,104 @@ def find_global_equal_area_spacing(height_fn, count, search_min=0.1, search_max=
     centers = build_bead_centers(count, spacing_solution)
     r = compute_incompressible_global(height_fn, centers, samples=800)
     return spacing_solution, r["total_overlap_area"], r["total_valley_area"]
+
+
+# ------------------------------------------------------------------
+# Conic fitting and geometric analysis -- shared backend for both
+# the standalone Conic_Fit.py script and the Streamlit app's
+# integrated "fit from points" mode. Kept centralized here so both
+# entry points use exactly the same, independently-verified math.
+# ------------------------------------------------------------------
+def fit_conic_from_points(x_data, y_data):
+    """Least-squares fit of the general conic (F fixed at -1).
+    Returns (A, B, C, D, E), X_matrix, Y_vector."""
+    X_matrix = np.column_stack([
+        x_data**2, x_data * y_data, y_data**2, x_data, y_data
+    ])
+    Y_vector = np.ones_like(x_data)
+    coeffs, _, _, _ = np.linalg.lstsq(X_matrix, Y_vector, rcond=None)
+    return coeffs, X_matrix, Y_vector
+
+
+def classify_curve(A, B, C, discriminant, tolerance_rel):
+    """Classify the conic using the discriminant, checking circle/ellipse
+    before the near-zero-discriminant parabola check (a genuine circle
+    naturally has a small negative discriminant, -4A^2)."""
+    scale = max(abs(A), abs(C), abs(B), 1e-12)
+    if abs(B) < tolerance_rel * scale and abs(A - C) < tolerance_rel * scale:
+        return "Circle"
+    elif abs(discriminant) < tolerance_rel * scale**2:
+        return "Parabola"
+    elif discriminant < 0:
+        return "Ellipse / circular arc segment"
+    else:
+        return "Hyperbola (not expected for a weld bead)"
+
+
+def analyze_circle_or_ellipse(A, B, C, D, E, F):
+    """Numerically extract center, semi-axes, rotation, and (for a true
+    ellipse) focal distance/eccentricity/foci, via eigen-decomposition.
+    Verified against known ground-truth circle and ellipse shapes,
+    including rotated cases."""
+    Q = np.array([[A, B / 2], [B / 2, C]])
+    M = np.array([[2 * A, B], [B, 2 * C]])
+    rhs = np.array([-D, -E])
+    x0, y0 = np.linalg.solve(M, rhs)
+    F0 = A * x0**2 + B * x0 * y0 + C * y0**2 + D * x0 + E * y0 + F
+
+    eigvals, eigvecs = np.linalg.eigh(Q)
+    axes_sq = [-F0 / lam for lam in eigvals]
+    a_sq, b_sq = max(axes_sq), min(axes_sq)
+    a, b = np.sqrt(max(a_sq, 0)), np.sqrt(max(b_sq, 0))
+
+    major_idx = np.argmax(axes_sq)
+    major_dir = eigvecs[:, major_idx]
+    rotation_deg = np.degrees(np.arctan2(major_dir[1], major_dir[0])) % 180
+    is_circle = np.isclose(a, b, rtol=1e-6)
+
+    result = {"center": (x0, y0), "semi_major": a, "semi_minor": b,
+              "rotation_deg": rotation_deg, "is_circle": is_circle}
+
+    if not is_circle and a_sq > b_sq:
+        c = np.sqrt(a_sq - b_sq)
+        ecc = c / a
+        theta = np.radians(rotation_deg)
+        focus1 = (x0 + c * np.cos(theta), y0 + c * np.sin(theta))
+        focus2 = (x0 - c * np.cos(theta), y0 - c * np.sin(theta))
+        result.update({"c": c, "eccentricity": ecc, "focus1": focus1, "focus2": focus2})
+
+    return result
+
+
+def analyze_parabola(A, B, C, D, E, F):
+    """Numerically extract vertex, axis direction, focal length (p), and
+    focus, via eigen-decomposition. Verified against known ground-truth
+    parabolas in multiple orientations."""
+    Q = np.array([[A, B / 2], [B / 2, C]])
+    eigvals, eigvecs = np.linalg.eigh(Q)
+
+    zero_idx = np.argmin(np.abs(eigvals))
+    nonzero_idx = 1 - zero_idx
+    lam = eigvals[nonzero_idx]
+    axis_dir = eigvecs[:, zero_idx]
+    perp_dir = eigvecs[:, nonzero_idx]
+
+    D_along_axis = D * axis_dir[0] + E * axis_dir[1]
+    E_along_perp = D * perp_dir[0] + E * perp_dir[1]
+
+    Y_shift = E_along_perp / (2 * lam)
+    F_shift = F - E_along_perp**2 / (4 * lam)
+    X_shift = F_shift / D_along_axis if abs(D_along_axis) > 1e-12 else 0.0
+    p_coef = -D_along_axis / lam if abs(lam) > 1e-12 else 0.0
+
+    X_vertex = -X_shift
+    Y_vertex = -Y_shift
+    vertex = X_vertex * axis_dir + Y_vertex * perp_dir
+
+    true_dir = axis_dir if p_coef >= 0 else -axis_dir
+    p = abs(p_coef) / 4.0
+    focus = vertex + p * true_dir
+    axis_angle_deg = np.degrees(np.arctan2(true_dir[1], true_dir[0])) % 360
+
+    return {"vertex": tuple(vertex), "axis_angle_deg": axis_angle_deg,
+            "p": p, "focus": tuple(focus)}
