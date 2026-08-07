@@ -19,7 +19,9 @@ from bead_overlap import (
     build_bead_centers, compute_envelope,
     compute_single_bead_area, compute_gap_metrics,
     find_equal_area_spacing, compute_incompressible_gap,
-    compute_incompressible_global
+    compute_incompressible_global,
+    fit_conic_from_points, classify_curve,
+    analyze_circle_or_ellipse, analyze_parabola
 )
 
 st.set_page_config(page_title="WAAM Bead Overlap Simulator", layout="centered")
@@ -32,7 +34,11 @@ st.caption("Side-by-side bead deposition on a flat substrate")
 st.header("1. Define the bead shape")
 st.write("All beads placed are identical, since they'd be welded with the same process parameters.")
 
-mode = st.radio("Bead definition mode", ["Preset shape", "Raw fitted equation"], horizontal=True)
+mode = st.radio(
+    "Bead definition mode",
+    ["Preset shape", "Fit from digitized points", "Raw fitted equation"],
+    horizontal=True, key="bead_mode"
+)
 
 height_fn = None
 approx_width = 20.0
@@ -57,21 +63,166 @@ if mode == "Preset shape":
         height_fn = lambda x, w=width, h=height, s=shape: height_at_preset(x, w, h, s)
         approx_width = width
 
+elif mode == "Fit from digitized points":
+    st.write(
+        "Enter your digitized bead profile points (bead width position x, "
+        "bead height y), one per row, as `x, y`. Add rows as needed -- at "
+        "least 5 points are required to solve for the 5 unknown coefficients."
+    )
+
+    if "point_rows" not in st.session_state:
+        st.session_state.point_rows = [""] * 5
+
+    for i in range(len(st.session_state.point_rows)):
+        st.session_state.point_rows[i] = st.text_input(
+            f"Point {i + 1} (x, y)", value=st.session_state.point_rows[i],
+            key=f"point_row_{i}", placeholder="e.g. -5.651, 2.016"
+        )
+
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        if st.button("➕ Add another point"):
+            st.session_state.point_rows.append("")
+            st.rerun()
+    with col_b:
+        if st.button("➖ Remove last point") and len(st.session_state.point_rows) > 5:
+            st.session_state.point_rows.pop()
+            for i in range(len(st.session_state.point_rows), len(st.session_state.point_rows) + 1):
+                st.session_state.pop(f"point_row_{i}", None)
+            st.rerun()
+    with col_c:
+        tolerance_rel = st.number_input(
+            "Classification tolerance", min_value=0.001, value=0.05, step=0.01,
+            format="%.3f", help="Controls how strict the parabola/circle/ellipse cutoff is."
+        )
+
+    if st.button("🔬 Run Conic Fit", type="primary"):
+        parsed_x, parsed_y, parse_errors = [], [], []
+        for i, raw in enumerate(st.session_state.point_rows):
+            raw = raw.strip()
+            if not raw:
+                continue
+            parts = raw.replace(",", " ").split()
+            if len(parts) != 2:
+                parse_errors.append(f"Point {i+1}: could not read two numbers ('{raw}')")
+                continue
+            try:
+                parsed_x.append(float(parts[0]))
+                parsed_y.append(float(parts[1]))
+            except ValueError:
+                parse_errors.append(f"Point {i+1}: '{raw}' is not two valid numbers")
+
+        if parse_errors:
+            st.error("Could not parse some points:\n\n" + "\n\n".join(parse_errors))
+        elif len(parsed_x) < 5:
+            st.error(f"Need at least 5 valid points to fit (got {len(parsed_x)}).")
+        else:
+            x_arr, y_arr = np.array(parsed_x), np.array(parsed_y)
+            coeffs, X_matrix, Y_vector = fit_conic_from_points(x_arr, y_arr)
+            A_f, B_f, C_f, D_f, E_f = coeffs
+            F_f = -1.0
+            discriminant = B_f**2 - 4 * A_f * C_f
+            curve_type = classify_curve(A_f, B_f, C_f, discriminant, tolerance_rel)
+            lhs_values = X_matrix @ coeffs
+            rmse = float(np.sqrt(np.mean((lhs_values - 1.0) ** 2)))
+            st.session_state.conic_fit_result = {
+                "A": A_f, "B": B_f, "C": C_f, "D": D_f, "E": E_f, "F": F_f,
+                "discriminant": discriminant, "curve_type": curve_type,
+                "rmse": rmse, "x_data": x_arr, "y_data": y_arr,
+                "lhs_values": lhs_values,
+                "width_guess": 2 * float(np.max(np.abs(x_arr))) * 1.1,
+            }
+
+    if "conic_fit_result" in st.session_state:
+        res = st.session_state.conic_fit_result
+        st.subheader("Fit results")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**Fitted coefficients:**")
+            st.write(f"A = {res['A']:.6f}")
+            st.write(f"B = {res['B']:.6f}")
+            st.write(f"C = {res['C']:.6f}")
+            st.write(f"D = {res['D']:.6f}")
+            st.write(f"E = {res['E']:.6f}")
+            st.write(f"F = {res['F']:.6f}  (fixed)")
+        with col2:
+            st.metric("Discriminant (B² − 4AC)", f"{res['discriminant']:.6f}")
+            st.metric("Classified curve type", res["curve_type"])
+            st.metric("Fit RMSE", f"{res['rmse']:.6f}")
+
+        with st.expander("Per-point fit deviation"):
+            for i, (xv, yv, lhs) in enumerate(zip(res["x_data"], res["y_data"], res["lhs_values"])):
+                st.write(f"Point {i+1} (x={xv}, y={yv}): LHS = {lhs:.4f}  (deviation {lhs-1.0:+.4f})")
+
+        st.write("**Geometric parameters:**")
+        ct = res["curve_type"]
+        if "Circle" in ct or ("Ellipse" in ct):
+            geo = analyze_circle_or_ellipse(res["A"], res["B"], res["C"], res["D"], res["E"], res["F"])
+            if geo["is_circle"]:
+                st.write(f"Center: ({geo['center'][0]:.4f}, {geo['center'][1]:.4f})")
+                st.write(f"Radius: {geo['semi_major']:.4f}")
+                st.write(f"Equation: (x − {geo['center'][0]:.4f})² + (y − {geo['center'][1]:.4f})² = {geo['semi_major']:.4f}²")
+            else:
+                st.write(f"Center: ({geo['center'][0]:.4f}, {geo['center'][1]:.4f})")
+                st.write(f"Semi-major axis: {geo['semi_major']:.4f}  |  Semi-minor axis: {geo['semi_minor']:.4f}")
+                st.write(f"Rotation: {geo['rotation_deg']:.4f}°")
+                if "c" in geo:
+                    st.write(f"Eccentricity: {geo['eccentricity']:.4f}  |  Focal distance: {geo['c']:.4f}")
+                    st.write(f"Foci: ({geo['focus1'][0]:.4f}, {geo['focus1'][1]:.4f}) and ({geo['focus2'][0]:.4f}, {geo['focus2'][1]:.4f})")
+        elif "Parabola" in ct:
+            geo = analyze_parabola(res["A"], res["B"], res["C"], res["D"], res["E"], res["F"])
+            st.write(f"Vertex: ({geo['vertex'][0]:.4f}, {geo['vertex'][1]:.4f})")
+            st.write(f"Axis direction: {geo['axis_angle_deg']:.4f}° from +x axis")
+            st.write(f"Focal length (p): {geo['p']:.4f}  |  Focus: ({geo['focus'][0]:.4f}, {geo['focus'][1]:.4f})")
+        else:
+            st.write("(Geometric parameters are not computed for a hyperbola -- not physically expected for a weld bead.)")
+
+        st.divider()
+
+        def _load_into_raw_mode():
+            st.session_state.coef_A = float(res["A"])
+            st.session_state.coef_B = float(res["B"])
+            st.session_state.coef_C = float(res["C"])
+            st.session_state.coef_D = float(res["D"])
+            st.session_state.coef_E = float(res["E"])
+            st.session_state.raw_eq_width = float(np.clip(res["width_guess"], 5.0, 80.0))
+            st.session_state.bead_mode = "Raw fitted equation"
+
+        st.button(
+            "➡️ Use this fitted equation below (switches to Raw fitted equation mode)",
+            on_click=_load_into_raw_mode
+        )
+
+    # No bead height_fn yet in this mode until the user hands it off --
+    # show a placeholder message rather than crashing downstream.
+    st.info("Once you've run the fit, click \"Use this fitted equation below\" to load it into the Raw fitted equation mode and continue.")
+    st.stop()
+
 else:
-    st.write("Enter the fitted coefficients A-E from Conic_Fit.py (F is fixed at -1):")
+    st.write("Enter the fitted coefficients A-E (F is fixed at -1). You can type these "
+             "directly, or use \"Fit from digitized points\" above and hand them off automatically.")
+    for _k, _v in [("coef_A", 0.0278), ("coef_B", 0.0000), ("coef_C", 0.0278), ("coef_D", 0.0000), ("coef_E", 0.0000)]:
+        st.session_state.setdefault(_k, _v)
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        A = st.number_input("A", value=0.0278, format="%.6f")
+        A = st.number_input("A", format="%.6f", key="coef_A")
     with col2:
-        B = st.number_input("B", value=0.0000, format="%.6f")
+        B = st.number_input("B", format="%.6f", key="coef_B")
     with col3:
-        C = st.number_input("C", value=0.0278, format="%.6f")
+        C = st.number_input("C", format="%.6f", key="coef_C")
     with col4:
-        D = st.number_input("D", value=0.0000, format="%.6f")
+        D = st.number_input("D", format="%.6f", key="coef_D")
     with col5:
-        E = st.number_input("E", value=0.0000, format="%.6f")
-    height_fn = lambda x, A=A, B=B, C=C, D=D, E=E: height_at_equation(x, A, B, C, D, E)
-    approx_width = st.slider("Approx. plotting width (mm) -- for display range only", 5.0, 60.0, 20.0)
+        E = st.number_input("E", format="%.6f", key="coef_E")
+
+    st.session_state.setdefault("raw_eq_width", 20.0)
+    approx_width = st.slider(
+        "Bead footprint width (mm) -- this is also the physical cutoff: "
+        "beyond half this distance from center, the equation is treated "
+        "as having no material, even if it would still return a value.",
+        5.0, 80.0, key="raw_eq_width"
+    )
+    height_fn = lambda x, A=A, B=B, C=C, D=D, E=E, hw=approx_width / 2: height_at_equation(x, A, B, C, D, E, valid_half_width=hw)
 
 if error_message:
     st.error(error_message)
