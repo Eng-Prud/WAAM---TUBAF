@@ -251,8 +251,41 @@ with st.expander("💡 Suggested equal-area spacing", expanded=True):
 col1, col2 = st.columns(2)
 with col1:
     count = st.slider("Number of beads", min_value=1, max_value=10, value=4)
+
 with col2:
-    spacing = st.slider("Center-to-center spacing (mm)", min_value=0.5, max_value=approx_width, value=min(7.0, approx_width), step=0.01, format="%.2f")
+    initial_spacing = min(7.0, approx_width)
+    st.session_state.setdefault("spacing", initial_spacing)
+    st.session_state.setdefault("spacing_slider_widget", initial_spacing)
+    st.session_state.setdefault("spacing_number_widget", initial_spacing)
+
+    # Keep everything valid if the bead width (and therefore the max) has
+    # changed since the last run -- otherwise Streamlit raises an error
+    # when a widget's stored value falls outside its own current range.
+    for _key in ("spacing", "spacing_slider_widget", "spacing_number_widget"):
+        st.session_state[_key] = float(np.clip(st.session_state[_key], 0.5, approx_width))
+
+    def _sync_from_slider():
+        v = st.session_state.spacing_slider_widget
+        st.session_state.spacing = v
+        st.session_state.spacing_number_widget = v
+
+    def _sync_from_number():
+        v = st.session_state.spacing_number_widget
+        st.session_state.spacing = v
+        st.session_state.spacing_slider_widget = v
+
+    st.slider(
+        "Center-to-center spacing (mm) -- drag for a quick look",
+        min_value=0.5, max_value=approx_width,
+        step=0.01, format="%.2f", key="spacing_slider_widget", on_change=_sync_from_slider
+    )
+    st.number_input(
+        "...or type an exact value (mm)",
+        min_value=0.5, max_value=approx_width,
+        step=0.01, format="%.2f", key="spacing_number_widget", on_change=_sync_from_number
+    )
+
+spacing = st.session_state.spacing
 
 centers = build_bead_centers(count, spacing)
 global_result = compute_incompressible_global(height_fn, centers) if count > 1 else None
