@@ -252,7 +252,7 @@ col1, col2 = st.columns(2)
 with col1:
     count = st.slider("Number of beads", min_value=1, max_value=10, value=4)
 with col2:
-    spacing = st.slider("Center-to-center spacing (mm)", min_value=0.5, max_value=approx_width, value=min(7.0, approx_width), step=0.1)
+    spacing = st.slider("Center-to-center spacing (mm)", min_value=0.5, max_value=approx_width, value=min(7.0, approx_width), step=0.01, format="%.2f")
 
 centers = build_bead_centers(count, spacing)
 global_result = compute_incompressible_global(height_fn, centers) if count > 1 else None
@@ -330,7 +330,7 @@ if show_details and count > 1:
 ax.axhline(0, color="#888780", lw=1)
 ax.set_xlabel("x -- position across substrate (mm)")
 ax.set_ylabel("y -- combined surface height (mm)")
-ax.set_title(f"{count} beads, spacing = {spacing:.1f} mm")
+ax.set_title(f"{count} beads, spacing = {spacing:.2f} mm")
 ax.legend(loc="lower center", fontsize=8, frameon=False, ncol=1)
 ax.grid(alpha=0.2)
 fig.tight_layout()
