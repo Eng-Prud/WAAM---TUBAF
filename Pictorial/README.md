@@ -53,18 +53,75 @@ python -m pip install numpy matplotlib streamlit
 
 ---
 
-## 4. How to run it
+## 4. Getting set up and running it
+
+This section assumes no prior setup — start here if you're picking this
+project up for the first time, on a new machine, or from a fresh clone.
+
+### 4.1 Get the project files onto your machine
+
+Pick whichever fits how you're accessing this repo:
+
+**Option A — clone it directly** (if you have push access, or just want
+a local copy):
+```
+git clone <repo-url>
+cd WAAM---TUBAF/Pictorial
+```
+
+**Option B — fork it first** (if you want your own independent copy to
+make changes without affecting the original): on GitHub, click **Fork**
+in the top-right of the repository page, then clone *your* fork instead
+of the original:
+```
+git clone <your-fork-url>
+cd WAAM---TUBAF/Pictorial
+```
+
+**Option C — no Git at all**: on the repo's GitHub page, click the
+green **Code** button → **Download ZIP**, then extract it somewhere on
+your machine.
+
+### 4.2 Open the project in VS Code
+
+1. Open VS Code.
+2. **File → Open Folder...** and select the `Pictorial` folder — the
+   one directly containing `app.py` and `bead_overlap.py`. (If you
+   downloaded a ZIP, extract it first — VS Code can't open a folder
+   from inside a `.zip` directly.)
+3. Open the integrated terminal with `` Ctrl+` `` (backtick), or via
+   **Terminal → New Terminal**. This terminal opens already inside the
+   folder you selected, so there's no need to `cd` into it manually.
+
+### 4.3 Install the required packages (one-time)
+
+In that terminal:
+```
+python -m pip install numpy matplotlib streamlit
+```
+If `python` isn't recognized, Python itself may not be installed, or
+wasn't added to your system PATH during installation — reinstall from
+[python.org](https://www.python.org/downloads/) and make sure to check
+"Add python.exe to PATH" during setup (Windows) before continuing.
+
+### 4.4 Run the app
 
 ```
 streamlit run app.py
 ```
-(If `streamlit` isn't recognized as a command, use `python -m streamlit run app.py` instead.)
+(If `streamlit` isn't recognized as a command, use
+`python -m streamlit run app.py` instead — this is a common Windows
+PATH quirk and doesn't mean anything is broken.)
 
-This opens the app in your browser. From there:
+This opens the app in your browser automatically. From there:
 
-1. **Define the bead shape** — preset or raw equation.
-2. **Place the beads** — set how many beads and the spacing between them with sliders.
-3. **View the result** — a live plot of the combined surface, plus metrics below it.
+1. **Define the bead shape** — pick a preset shape, fit one directly
+   from digitized points, or enter a raw fitted equation.
+2. **Place the beads** — set how many beads, and set the spacing
+   either by dragging the slider for a quick look or typing an exact
+   value into the number box next to it (both stay in sync).
+3. **View the result** — a live plot of the combined surface, plus
+   metrics below it.
 
 ---
 
