@@ -102,6 +102,23 @@ def height_at_equation(x, A, B, C, D, E, valid_half_width=None):
     sqrt_disc = np.sqrt(discriminant)
     root1 = (-b_coef + sqrt_disc) / (2 * a_coef)
     root2 = (-b_coef - sqrt_disc) / (2 * a_coef)
+
+    # A real digitized bead is almost never an EXACT parabola (C exactly 0)
+    # -- the least-squares fit instead lands on a C that is merely very
+    # small. That's not "linear" by the strict check above, so the code
+    # still solves the full quadratic -- but with a_coef this close to
+    # zero, one of the two roots explodes toward +/-infinity (a
+    # mathematical artifact of forcing a near-straight-line equation into
+    # quadratic form), while the other root stays close to the sane,
+    # physical bead height. For a genuine ellipse/circle, by contrast,
+    # a_coef is not small, and BOTH roots are comparable in size -- the
+    # larger one is correctly the top surface, same as before.
+    # So: only when the two roots differ wildly in size do we know one of
+    # them is that runaway artifact, and we take the small, bounded one
+    # instead of blindly taking the larger value.
+    lo, hi = sorted([root1, root2], key=abs)
+    if abs(hi) > 20 * max(abs(lo), 1e-9):
+        return lo
     return max(root1, root2)  # upper branch = top surface of the bead
 
 

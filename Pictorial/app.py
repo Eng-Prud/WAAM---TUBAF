@@ -10,6 +10,8 @@ combined overlap surface, waviness, and area metrics update live.
 
 import streamlit as st
 import numpy as np
+import io
+import csv
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -23,6 +25,43 @@ from bead_overlap import (
     fit_conic_from_points, classify_curve,
     analyze_circle_or_ellipse, analyze_parabola
 )
+
+def parse_csv_points(uploaded_file):
+    """Parse an uploaded CSV of (x, y) points. Handles an optional header
+    row (detected automatically -- no special formatting required) and
+    silently skips blank lines. Returns (x_list, y_list, error_list)."""
+    raw_bytes = uploaded_file.getvalue()
+    try:
+        content = raw_bytes.decode("utf-8-sig")  # utf-8-sig also strips a BOM, common in Excel exports
+    except UnicodeDecodeError:
+        return [], [], ["Could not read the file as text -- please export it as a plain CSV."]
+
+    reader = csv.reader(io.StringIO(content))
+    rows = [row for row in reader if row and any(cell.strip() for cell in row)]
+    if not rows:
+        return [], [], ["The CSV file appears to be empty."]
+
+    # Auto-detect a header row: if the first row's first two cells aren't
+    # both valid numbers, treat it as a header and skip it.
+    start_idx = 0
+    try:
+        float(rows[0][0])
+        float(rows[0][1])
+    except (ValueError, IndexError):
+        start_idx = 1
+
+    xs, ys, errors = [], [], []
+    for i, row in enumerate(rows[start_idx:], start=start_idx + 1):
+        if len(row) < 2:
+            errors.append(f"Row {i}: expected 2 columns (x, y), got {len(row)}")
+            continue
+        try:
+            xs.append(float(row[0]))
+            ys.append(float(row[1]))
+        except ValueError:
+            errors.append(f"Row {i}: '{row[0]}, {row[1]}' is not two valid numbers")
+    return xs, ys, errors
+
 
 st.set_page_config(page_title="WAAM Bead Overlap Simulator", layout="centered")
 st.title("WAAM Bead Overlap Simulator")
@@ -65,57 +104,92 @@ if mode == "Preset shape":
 
 elif mode == "Fit from digitized points":
     st.write(
-        "Enter your digitized bead profile points (bead width position x, "
-        "bead height y), one per row, as `x, y`. Add rows as needed -- at "
-        "least 5 points are required to solve for the 5 unknown coefficients."
+        "Provide your digitized bead profile points (bead width position x, "
+        "bead height y). At least 5 points are required to solve for the "
+        "5 unknown coefficients."
     )
 
-    if "point_rows" not in st.session_state:
-        st.session_state.point_rows = [""] * 5
+    input_method = st.radio(
+        "How would you like to provide your points?",
+        ["Upload CSV file", "Enter manually"], horizontal=True, key="points_input_method"
+    )
 
-    for i in range(len(st.session_state.point_rows)):
-        st.session_state.point_rows[i] = st.text_input(
-            f"Point {i + 1} (x, y)", value=st.session_state.point_rows[i],
-            key=f"point_row_{i}", placeholder="e.g. -5.651, 2.016"
-        )
+    csv_x, csv_y = None, None
 
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        if st.button("➕ Add another point"):
-            st.session_state.point_rows.append("")
-            st.rerun()
-    with col_b:
-        if st.button("➖ Remove last point") and len(st.session_state.point_rows) > 5:
-            st.session_state.point_rows.pop()
-            for i in range(len(st.session_state.point_rows), len(st.session_state.point_rows) + 1):
-                st.session_state.pop(f"point_row_{i}", None)
-            st.rerun()
-    with col_c:
-        tolerance_rel = st.number_input(
-            "Classification tolerance", min_value=0.001, value=0.05, step=0.01,
-            format="%.3f", help="Controls how strict the parabola/circle/ellipse cutoff is."
+    if input_method == "Upload CSV file":
+        st.caption(
+            "CSV should have two columns, x and y, one point per row. A "
+            "header row (e.g. \"x,y\"), if present, is detected and skipped "
+            "automatically -- no special formatting needed."
         )
+        uploaded = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
+        if uploaded is not None:
+            xs, ys, parse_errors = parse_csv_points(uploaded)
+            if parse_errors:
+                st.error("Some rows could not be parsed:\n\n" + "\n\n".join(parse_errors))
+            if len(xs) >= 5:
+                csv_x, csv_y = xs, ys
+                st.success(f"Loaded {len(xs)} valid points from **{uploaded.name}**.")
+                with st.expander(f"Preview parsed points ({len(xs)})"):
+                    for i, (xv, yv) in enumerate(zip(xs, ys)):
+                        st.write(f"Point {i + 1}: x = {xv}, y = {yv}")
+            elif xs:
+                st.error(f"Only {len(xs)} valid point(s) found -- need at least 5.")
+
+    else:
+        if "point_rows" not in st.session_state:
+            st.session_state.point_rows = [""] * 5
+
+        for i in range(len(st.session_state.point_rows)):
+            st.session_state.point_rows[i] = st.text_input(
+                f"Point {i + 1} (x, y)", value=st.session_state.point_rows[i],
+                key=f"point_row_{i}", placeholder="e.g. -5.651, 2.016"
+            )
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("➕ Add another point"):
+                st.session_state.point_rows.append("")
+                st.rerun()
+        with col_b:
+            if st.button("➖ Remove last point") and len(st.session_state.point_rows) > 5:
+                st.session_state.point_rows.pop()
+                st.session_state.pop(f"point_row_{len(st.session_state.point_rows)}", None)
+                st.rerun()
+
+    tolerance_rel = st.number_input(
+        "Classification tolerance", min_value=0.001, value=0.05, step=0.01,
+        format="%.3f", help="Controls how strict the parabola/circle/ellipse cutoff is."
+    )
 
     if st.button("🔬 Run Conic Fit", type="primary"):
-        parsed_x, parsed_y, parse_errors = [], [], []
-        for i, raw in enumerate(st.session_state.point_rows):
-            raw = raw.strip()
-            if not raw:
-                continue
-            parts = raw.replace(",", " ").split()
-            if len(parts) != 2:
-                parse_errors.append(f"Point {i+1}: could not read two numbers ('{raw}')")
-                continue
-            try:
-                parsed_x.append(float(parts[0]))
-                parsed_y.append(float(parts[1]))
-            except ValueError:
-                parse_errors.append(f"Point {i+1}: '{raw}' is not two valid numbers")
+        if input_method == "Upload CSV file":
+            if csv_x is None:
+                st.error("Please upload a CSV file with at least 5 valid points first.")
+                parsed_x, parsed_y, parse_errors = [], [], []
+            else:
+                parsed_x, parsed_y, parse_errors = csv_x, csv_y, []
+        else:
+            parsed_x, parsed_y, parse_errors = [], [], []
+            for i, raw in enumerate(st.session_state.point_rows):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                parts = raw.replace(",", " ").split()
+                if len(parts) != 2:
+                    parse_errors.append(f"Point {i+1}: could not read two numbers ('{raw}')")
+                    continue
+                try:
+                    parsed_x.append(float(parts[0]))
+                    parsed_y.append(float(parts[1]))
+                except ValueError:
+                    parse_errors.append(f"Point {i+1}: '{raw}' is not two valid numbers")
 
         if parse_errors:
             st.error("Could not parse some points:\n\n" + "\n\n".join(parse_errors))
         elif len(parsed_x) < 5:
-            st.error(f"Need at least 5 valid points to fit (got {len(parsed_x)}).")
+            if input_method != "Upload CSV file" or csv_x is not None:
+                st.error(f"Need at least 5 valid points to fit (got {len(parsed_x)}).")
         else:
             x_arr, y_arr = np.array(parsed_x), np.array(parsed_y)
             coeffs, X_matrix, Y_vector = fit_conic_from_points(x_arr, y_arr)
