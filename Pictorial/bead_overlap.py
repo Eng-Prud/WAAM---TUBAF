@@ -63,6 +63,17 @@ def height_at_preset(x, width, height, shape="parabola"):
 #     A*x^2 + B*x*y + C*y^2 + D*x + E*y = 1   (F fixed at -1, as in Conic_Fit.py)
 # ------------------------------------------------------------------
 def height_at_equation(x, A, B, C, D, E, valid_half_width=None):
+    """Public entry point: bead height at x from the fitted conic, or None
+    where there is no material. Any height at or below zero is treated as
+    "no material" -- a weld bead cannot extend below the substrate, and a
+    digitized fit often dips slightly negative right at the bead's toes."""
+    h = _height_at_equation_raw(x, A, B, C, D, E, valid_half_width)
+    if h is None or h <= 0:
+        return None
+    return h
+
+
+def _height_at_equation_raw(x, A, B, C, D, E, valid_half_width=None):
     """
     Return the bead's height at position x, solving the conic equation
     directly for y (quadratic in y). Returns the upper branch (top
