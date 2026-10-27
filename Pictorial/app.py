@@ -204,7 +204,7 @@ elif mode == "Fit from digitized points":
                 "discriminant": discriminant, "curve_type": curve_type,
                 "rmse": rmse, "x_data": x_arr, "y_data": y_arr,
                 "lhs_values": lhs_values,
-                "width_guess": 2 * float(np.max(np.abs(x_arr))) * 1.1,
+                "width_guess": 2 * float(np.max(np.abs(x_arr))),
             }
 
     if "conic_fit_result" in st.session_state:
